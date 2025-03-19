@@ -8,7 +8,7 @@ A userscript that adds a confirmation dialog when unliking tracks on SoundCloud,
 - ◉ **Simple Protection**: No settings to configure - works automatically
 - ↻ **Seamless Integration**: Overlay matches SoundCloud's visual style
 - ⌘ **Works Everywhere**: Compatible with all SoundCloud pages where likes appear
-- ⚡️︎ **Lightweight**: Minimal impact on SoundCloud's performance
+- ✓ **Lightweight**: Minimal impact on SoundCloud's performance
 
 ## Installation
 
