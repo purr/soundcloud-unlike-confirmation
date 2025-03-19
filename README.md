@@ -24,13 +24,13 @@ A userscript that adds a confirmation dialog when unliking tracks on SoundCloud,
 
 **Option 1: One-click installation**
 
-- [Click here to install](https://github.com/purr/soundcloud-unlike-fix/raw/main/soundcloud-unlike-fix.user.js)
+- [Click here to install](https://github.com/purr/soundcloud-unlike-confirmation/raw/main/soundcloud-unlike-confirmation.user.js)
 
 **Option 2: Manual installation**
 
 1. Open your userscript manager dashboard
 2. Create a new script
-3. Copy and paste the contents of [soundcloud-unlike-fix.user.js](soundcloud-unlike-fix.user.js)
+3. Copy and paste the contents of [soundcloud-unlike-confirmation.user.js](soundcloud-unlike-confirmation.user.js)
 4. Save the script
 
 ## How It Works

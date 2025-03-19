@@ -1,12 +1,14 @@
 // ==UserScript==
 // @name         SoundCloud Unlike Confirmation
-// @namespace    http://tampermonkey.net/
-// @version      1.0.0
+// @namespace    https://github.com/purr
+// @version      1.0.3
 // @description  Adds a confirmation popup when unliking tracks on SoundCloud
 // @author       purr
 // @match        https://*.soundcloud.com/*
 // @grant        none
 // @icon         https://www.soundcloud.com/favicon.ico
+// @updateURL    https://raw.githubusercontent.com/purr/soundcloud-unlike-confirmation/main/soundcloud-unlike-confirmation.user.js
+// @downloadURL  https://raw.githubusercontent.com/purr/soundcloud-unlike-confirmation/main/soundcloud-unlike-confirmation.user.js
 // ==/UserScript==
 
 (function () {
