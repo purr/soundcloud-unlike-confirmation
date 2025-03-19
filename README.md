@@ -4,11 +4,11 @@ A userscript that adds a confirmation dialog when unliking tracks on SoundCloud,
 
 ## Features
 
-- ⚠ **Unlike Confirmation**: Prevents accidental unlike actions with a clean confirmation dialog
+- ⚠︎ **Unlike Confirmation**: Prevents accidental unlike actions with a clean confirmation dialog
 - ◉ **Simple Protection**: No settings to configure - works automatically
 - ↻ **Seamless Integration**: Overlay matches SoundCloud's visual style
 - ⌘ **Works Everywhere**: Compatible with all SoundCloud pages where likes appear
-- ⚡️ **Lightweight**: Minimal impact on SoundCloud's performance
+- ⚡️︎ **Lightweight**: Minimal impact on SoundCloud's performance
 
 ## Installation
 
