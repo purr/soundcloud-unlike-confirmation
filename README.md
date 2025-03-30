@@ -1,10 +1,11 @@
-# SoundCloud Unlike Confirmation
+# SoundCloud Unlike & Unfollow Confirmation
 
-A userscript that adds a confirmation dialog when unliking tracks on SoundCloud, preventing accidental unlikes.
+This userscript adds a confirmation popup when you attempt to unlike tracks or unfollow users on SoundCloud. It helps prevent accidental unlikes or unfollows by requiring you to confirm your action.
 
 ## Features
 
-- ⚠︎ **Unlike Confirmation**: Prevents accidental unlike actions with a clean confirmation dialog
+- **Unlike Confirmation**: When you click the "Unlike" button on a track, a confirmation dialog will appear asking if you're sure you want to unlike the track.
+- **Unfollow Confirmation**: When you click the "Unfollow" button on a user or artist, a confirmation dialog will appear asking if you're sure you want to unfollow them.
 - ◉ **Simple Protection**: No settings to configure - works automatically
 - ↻ **Seamless Integration**: Overlay matches SoundCloud's visual style
 - ⌘ **Works Everywhere**: Compatible with all SoundCloud pages where likes appear
@@ -37,12 +38,17 @@ A userscript that adds a confirmation dialog when unliking tracks on SoundCloud,
 
 This userscript works by:
 
-1. Monitoring for clicks on SoundCloud's "Unlike" buttons
+1. Monitoring for clicks on SoundCloud's "Unlike" and "Unfollow" buttons
 2. Intercepting the click and displaying a confirmation dialog
-3. Only processing the unlike action if confirmed
+3. Only processing the unlike or unfollow action if confirmed
 4. Seamlessly returning to normal browsing if canceled
 
 The confirmation dialog is styled to match SoundCloud's interface, providing a native-like experience.
+
+## Usage
+
+1. **Unlike a Track**: Click the "Unlike" button on any track. A confirmation dialog will appear. Click "Unlike" to confirm or "Cancel" to abort.
+2. **Unfollow a User**: Click the "Unfollow" button on any user or artist. A confirmation dialog will appear. Click "Unfollow" to confirm or "Cancel" to abort.
 
 ## Why Use This?
 
