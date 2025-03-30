@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         SoundCloud Unlike Confirmation
+// @name         SoundCloud Unlike & Unfollow Confirmation
 // @namespace    https://github.com/purr
-// @version      1.0.3
-// @description  Adds a confirmation popup when unliking tracks on SoundCloud
+// @version      1.1.0
+// @description  Adds a confirmation popup when unliking tracks or unfollowing users on SoundCloud
 // @author       purr
 // @match        https://*.soundcloud.com/*
 // @grant        none
@@ -51,11 +51,11 @@
     `;
 
     dialog.innerHTML = `
-            <h3 style="margin-top: 0; color: #333;">Confirm Unlike</h3>
-            <p style="color: #666;">Are you sure you want to unlike this track?</p>
+            <h3 style="margin-top: 0; color: #333;" id="confirm-dialog-title">Confirm Action</h3>
+            <p style="color: #666;" id="confirm-dialog-message">Are you sure?</p>
             <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 15px;">
-                <button id="cancel-unlike" style="padding: 8px 16px; background: #f2f2f2; border: none; border-radius: 3px; cursor: pointer;">Cancel</button>
-                <button id="confirm-unlike" style="padding: 8px 16px; background: #f50; color: white; border: none; border-radius: 3px; cursor: pointer;">Unlike</button>
+                <button id="cancel-action" style="padding: 8px 16px; background: #f2f2f2; border: none; border-radius: 3px; cursor: pointer;">Cancel</button>
+                <button id="confirm-action" style="padding: 8px 16px; background: #f50; color: white; border: none; border-radius: 3px; cursor: pointer;">Confirm</button>
             </div>
         `;
 
@@ -82,90 +82,127 @@
   let originalButton = null;
   let confirmDialog = null;
   let confirmOverlay = null;
+  let actionType = null;
 
-  // Function to handle the unlike button click
-  const handleUnlikeClick = (event) => {
+  // Function to show the confirmation dialog
+  const showConfirmDialog = (button, type) => {
+    // Store the original button and action type
+    originalButton = button;
+    actionType = type;
+
+    // Create dialog if it doesn't exist
+    if (!confirmDialog) {
+      const elements = createConfirmDialog();
+      confirmDialog = elements.dialog;
+      confirmOverlay = elements.overlay;
+
+      // Add event listeners to dialog buttons
+      document
+        .getElementById("cancel-action")
+        .addEventListener("click", hideConfirmDialog);
+
+      document
+        .getElementById("confirm-action")
+        .addEventListener("click", confirmAction);
+    }
+
+    // Update dialog text based on action type
+    const dialogTitle = document.getElementById("confirm-dialog-title");
+    const dialogMessage = document.getElementById("confirm-dialog-message");
+    const confirmButton = document.getElementById("confirm-action");
+
+    if (actionType === "unlike") {
+      dialogTitle.textContent = "Confirm Unlike";
+      dialogMessage.textContent = "Are you sure you want to unlike this track?";
+      confirmButton.textContent = "Unlike";
+    } else if (actionType === "unfollow") {
+      dialogTitle.textContent = "Confirm Unfollow";
+      dialogMessage.textContent =
+        "Are you sure you want to unfollow this user?";
+      confirmButton.textContent = "Unfollow";
+    }
+
+    // Reset the dialog state before showing it again
+    confirmDialog.style.opacity = "0";
+    confirmDialog.style.transform = "translate(-50%, -50%) scale(0.95)";
+    confirmOverlay.style.opacity = "0";
+
+    // Show the confirmation dialog and overlay
+    confirmDialog.style.display = "block";
+    confirmOverlay.style.display = "block";
+
+    // Use requestAnimationFrame to ensure the transition works consistently
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        // Apply the visible state
+        confirmDialog.style.opacity = "1";
+        confirmDialog.style.transform = "translate(-50%, -50%) scale(1)";
+        confirmOverlay.style.opacity = "1";
+      });
+    });
+  };
+
+  // Function to hide the confirmation dialog
+  const hideConfirmDialog = () => {
+    confirmDialog.style.opacity = "0";
+    confirmDialog.style.transform = "translate(-50%, -50%) scale(0.95)";
+    confirmOverlay.style.opacity = "0";
+    setTimeout(() => {
+      confirmDialog.style.display = "none";
+      confirmOverlay.style.display = "none";
+    }, 150);
+  };
+
+  // Function to confirm and execute the action
+  const confirmAction = () => {
+    hideConfirmDialog();
+
+    setTimeout(() => {
+      if (originalButton) {
+        // Remove our event listener temporarily to avoid infinite loop
+        document.removeEventListener("click", handleButtonClick, true);
+
+        // Simulate a click on the original button
+        originalButton.click();
+
+        // Re-add our event listener after a short delay
+        setTimeout(() => {
+          document.addEventListener("click", handleButtonClick, true);
+        }, 100);
+      }
+    }, 150);
+  };
+
+  // Function to handle button clicks (unlike and unfollow)
+  const handleButtonClick = (event) => {
     // Check if the clicked element is an unlike button
-    // Look for buttons with both the sc-button-like class and aria-label="Unlike"
     const unlikeButton = event.target.closest(
       'button.sc-button-like[aria-label="Unlike"]'
+    );
+
+    // Check if the clicked element is an unfollow button
+    const unfollowButton = event.target.closest(
+      "button.sc-button-follow.sc-button-selected"
     );
 
     if (unlikeButton) {
       // Prevent the default action
       event.preventDefault();
       event.stopPropagation();
-
-      // Store the original button
-      originalButton = unlikeButton;
-
-      // Create dialog if it doesn't exist
-      if (!confirmDialog) {
-        const elements = createConfirmDialog();
-        confirmDialog = elements.dialog;
-        confirmOverlay = elements.overlay;
-
-        // Add event listeners to dialog buttons
-        document
-          .getElementById("cancel-unlike")
-          .addEventListener("click", () => {
-            confirmDialog.style.opacity = "0";
-            confirmDialog.style.transform = "translate(-50%, -50%) scale(0.95)";
-            confirmOverlay.style.opacity = "0";
-            setTimeout(() => {
-              confirmDialog.style.display = "none";
-              confirmOverlay.style.display = "none";
-            }, 150);
-          });
-
-        document
-          .getElementById("confirm-unlike")
-          .addEventListener("click", () => {
-            confirmDialog.style.opacity = "0";
-            confirmDialog.style.transform = "translate(-50%, -50%) scale(0.95)";
-            confirmOverlay.style.opacity = "0";
-            setTimeout(() => {
-              confirmDialog.style.display = "none";
-              confirmOverlay.style.display = "none";
-              if (originalButton) {
-                // Remove our event listener temporarily to avoid infinite loop
-                document.removeEventListener("click", handleUnlikeClick, true);
-
-                // Simulate a click on the original button
-                originalButton.click();
-
-                // Re-add our event listener after a short delay
-                setTimeout(() => {
-                  document.addEventListener("click", handleUnlikeClick, true);
-                }, 100);
-              }
-            }, 150);
-          });
-      } else {
-        // Reset the dialog state before showing it again
-        confirmDialog.style.opacity = "0";
-        confirmDialog.style.transform = "translate(-50%, -50%) scale(0.95)";
-        confirmOverlay.style.opacity = "0";
-      }
-
-      // Show the confirmation dialog and overlay
-      confirmDialog.style.display = "block";
-      confirmOverlay.style.display = "block";
-
-      // Use requestAnimationFrame to ensure the transition works consistently
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          // Apply the visible state
-          confirmDialog.style.opacity = "1";
-          confirmDialog.style.transform = "translate(-50%, -50%) scale(1)";
-          confirmOverlay.style.opacity = "1";
-        });
-      });
+      showConfirmDialog(unlikeButton, "unlike");
+    } else if (
+      unfollowButton &&
+      unfollowButton.textContent.includes("Following")
+    ) {
+      // Prevent the default action
+      event.preventDefault();
+      event.stopPropagation();
+      showConfirmDialog(unfollowButton, "unfollow");
     }
   };
 
-  // Add event listener to the document to catch all unlike button clicks
-  document.addEventListener("click", handleUnlikeClick, true);
+  // Add event listener to the document to catch all button clicks
+  document.addEventListener("click", handleButtonClick, true);
 
   // Add a mutation observer to handle dynamically loaded content
   const observer = new MutationObserver((mutations) => {
@@ -180,5 +217,5 @@
   // Start observing the document with the configured parameters
   observer.observe(document.body, { childList: true, subtree: true });
 
-  console.log("SoundCloud Unlike Confirmation script loaded");
+  console.log("SoundCloud Unlike & Unfollow Confirmation script loaded");
 })();
