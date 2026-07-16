@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name         SoundCloud Unlike & Unfollow Confirmation
 // @namespace    https://github.com/purr
-// @version      1.1.0
+// @version      1.2.0
 // @description  Adds a confirmation popup when unliking tracks or unfollowing users on SoundCloud
 // @author       purr
 // @match        https://*.soundcloud.com/*
+// @run-at       document-start
 // @grant        none
 // @icon         https://www.soundcloud.com/favicon.ico
 // @updateURL    https://raw.githubusercontent.com/purr/soundcloud-unlike-confirmation/main/soundcloud-unlike-confirmation.user.js
@@ -14,208 +15,303 @@
 (function () {
   "use strict";
 
-  // Create and append the confirmation dialog to the page
-  const createConfirmDialog = () => {
-    // Create overlay
-    const overlay = document.createElement("div");
-    overlay.id = "unlike-confirmation-overlay";
-    overlay.style.cssText = `
+  const MESSAGES = {
+    unlike: {
+      title: "Confirm Unlike",
+      message: "Are you sure you want to unlike this track?",
+      confirm: "Unlike",
+    },
+    unfollow: {
+      title: "Confirm Unfollow",
+      message: "Are you sure you want to unfollow this user?",
+      confirm: "Unfollow",
+    },
+  };
+
+  // SoundCloud themes light/dark via CSS variables on <body> (theme-light /
+  // theme-dark class), so var() with a light fallback tracks the page theme.
+  const CSS = `
+    .scuc-overlay {
       position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      background-color: rgba(0, 0, 0, 0.7);
-      z-index: 9998;
+      inset: 0;
       display: none;
+      align-items: center;
+      justify-content: center;
+      background: var(--overlay-color, rgba(18, 18, 18, 0.4));
+      z-index: 100000;
       opacity: 0;
       transition: opacity 0.15s ease-in-out;
-    `;
+      font-family: "Interstate", "Lucida Grande", "Lucida Sans Unicode", "Lucida Sans", Garuda, Verdana, Tahoma, sans-serif;
+    }
+    .scuc-overlay.scuc-open {
+      opacity: 1;
+    }
+    .scuc-dialog {
+      background: var(--background-surface-color, #fff);
+      color: var(--font-primary-color, #121212);
+      border: 1px solid var(--highlight-color, #e5e5e5);
+      border-radius: 8px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+      padding: 24px;
+      width: min(400px, calc(100vw - 32px));
+      box-sizing: border-box;
+      transform: scale(0.95);
+      transition: transform 0.15s ease-in-out;
+    }
+    .scuc-overlay.scuc-open .scuc-dialog {
+      transform: scale(1);
+    }
+    .scuc-title {
+      margin: 0 0 8px;
+      font-size: 16px;
+      font-weight: 600;
+    }
+    .scuc-message {
+      margin: 0;
+      font-size: 14px;
+      color: var(--font-secondary-color, #666);
+    }
+    .scuc-buttons {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-top: 20px;
+    }
+    .scuc-btn {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 4px;
+      font: inherit;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    .scuc-btn:hover {
+      opacity: 0.8;
+    }
+    .scuc-btn:focus-visible {
+      outline: 2px solid #f50;
+      outline-offset: 2px;
+    }
+    .scuc-cancel {
+      background: var(--highlight-color, #f3f3f3);
+      color: var(--font-primary-color, #121212);
+    }
+    .scuc-confirm {
+      background: #f50;
+      color: #fff;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .scuc-overlay,
+      .scuc-dialog {
+        transition: none;
+      }
+    }
+  `;
+
+  let overlay = null;
+  let titleEl = null;
+  let messageEl = null;
+  let cancelBtn = null;
+  let confirmBtn = null;
+  let pendingButton = null;
+  let lastFocused = null;
+  let hideTimer = null;
+  let isOpen = false;
+  let openedAt = 0;
+
+  const createDialog = () => {
+    const style = document.createElement("style");
+    style.textContent = CSS;
+    document.head.appendChild(style);
+
+    overlay = document.createElement("div");
+    overlay.className = "scuc-overlay";
 
     const dialog = document.createElement("div");
-    dialog.id = "unlike-confirmation-dialog";
-    dialog.style.cssText = `
-      position: fixed;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%) scale(0.95);
-      background-color: #f2f2f2;
-      border-radius: 4px;
-      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
-      padding: 20px;
-      z-index: 9999;
-      display: none;
-      opacity: 0;
-      transition: opacity 0.15s ease-in-out, transform 0.15s ease-in-out;
-      font-family: "Interstate", "Lucida Grande", "Lucida Sans Unicode", "Lucida Sans", Garuda, Verdana, Tahoma, sans-serif;
-    `;
+    dialog.className = "scuc-dialog";
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    dialog.setAttribute("aria-labelledby", "scuc-dialog-title");
+    dialog.setAttribute("aria-describedby", "scuc-dialog-message");
 
-    dialog.innerHTML = `
-            <h3 style="margin-top: 0; color: #333;" id="confirm-dialog-title">Confirm Action</h3>
-            <p style="color: #666;" id="confirm-dialog-message">Are you sure?</p>
-            <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 15px;">
-                <button id="cancel-action" style="padding: 8px 16px; background: #f2f2f2; border: none; border-radius: 3px; cursor: pointer;">Cancel</button>
-                <button id="confirm-action" style="padding: 8px 16px; background: #f50; color: white; border: none; border-radius: 3px; cursor: pointer;">Confirm</button>
-            </div>
-        `;
+    titleEl = document.createElement("h3");
+    titleEl.className = "scuc-title";
+    titleEl.id = "scuc-dialog-title";
 
+    messageEl = document.createElement("p");
+    messageEl.className = "scuc-message";
+    messageEl.id = "scuc-dialog-message";
+
+    const buttons = document.createElement("div");
+    buttons.className = "scuc-buttons";
+
+    cancelBtn = document.createElement("button");
+    cancelBtn.type = "button";
+    cancelBtn.className = "scuc-btn scuc-cancel";
+    cancelBtn.textContent = "Cancel";
+
+    confirmBtn = document.createElement("button");
+    confirmBtn.type = "button";
+    confirmBtn.className = "scuc-btn scuc-confirm";
+
+    buttons.append(cancelBtn, confirmBtn);
+    dialog.append(titleEl, messageEl, buttons);
+    overlay.appendChild(dialog);
     document.body.appendChild(overlay);
-    document.body.appendChild(dialog);
 
-    // Add click event to overlay to close the dialog
+    // Close on backdrop click, but only when the press also started on the
+    // backdrop (not a drag out of the dialog) and the dialog has been open
+    // long enough that a double-click's second click can't insta-cancel it.
+    let pressOnBackdrop = false;
+    overlay.addEventListener("pointerdown", (event) => {
+      pressOnBackdrop = event.target === overlay;
+    });
     overlay.addEventListener("click", (event) => {
-      if (event.target === overlay) {
-        confirmDialog.style.opacity = "0";
-        confirmDialog.style.transform = "translate(-50%, -50%) scale(0.95)";
-        confirmOverlay.style.opacity = "0";
-        setTimeout(() => {
-          confirmDialog.style.display = "none";
-          confirmOverlay.style.display = "none";
-        }, 150);
+      if (
+        event.target === overlay &&
+        pressOnBackdrop &&
+        Date.now() - openedAt > 250
+      ) {
+        closeDialog();
       }
     });
-
-    return { dialog, overlay };
+    cancelBtn.addEventListener("click", closeDialog);
+    confirmBtn.addEventListener("click", confirmAction);
   };
 
-  // Store the original button that was clicked
-  let originalButton = null;
-  let confirmDialog = null;
-  let confirmOverlay = null;
-  let actionType = null;
-
-  // Function to show the confirmation dialog
-  const showConfirmDialog = (button, type) => {
-    // Store the original button and action type
-    originalButton = button;
-    actionType = type;
-
-    // Create dialog if it doesn't exist
-    if (!confirmDialog) {
-      const elements = createConfirmDialog();
-      confirmDialog = elements.dialog;
-      confirmOverlay = elements.overlay;
-
-      // Add event listeners to dialog buttons
-      document
-        .getElementById("cancel-action")
-        .addEventListener("click", hideConfirmDialog);
-
-      document
-        .getElementById("confirm-action")
-        .addEventListener("click", confirmAction);
+  const onKeydown = (event) => {
+    // A held key (e.g. Enter still down from triggering the unlike button)
+    // must not auto-activate a dialog button.
+    if (event.repeat) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
     }
-
-    // Update dialog text based on action type
-    const dialogTitle = document.getElementById("confirm-dialog-title");
-    const dialogMessage = document.getElementById("confirm-dialog-message");
-    const confirmButton = document.getElementById("confirm-action");
-
-    if (actionType === "unlike") {
-      dialogTitle.textContent = "Confirm Unlike";
-      dialogMessage.textContent = "Are you sure you want to unlike this track?";
-      confirmButton.textContent = "Unlike";
-    } else if (actionType === "unfollow") {
-      dialogTitle.textContent = "Confirm Unfollow";
-      dialogMessage.textContent =
-        "Are you sure you want to unfollow this user?";
-      confirmButton.textContent = "Unfollow";
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      closeDialog();
+    } else if (event.key === "Tab") {
+      event.preventDefault();
+      (document.activeElement === confirmBtn ? cancelBtn : confirmBtn).focus();
     }
+  };
 
-    // Reset the dialog state before showing it again
-    confirmDialog.style.opacity = "0";
-    confirmDialog.style.transform = "translate(-50%, -50%) scale(0.95)";
-    confirmOverlay.style.opacity = "0";
+  const openDialog = (button, type, focusConfirm) => {
+    if (!overlay) createDialog();
+    clearTimeout(hideTimer);
 
-    // Show the confirmation dialog and overlay
-    confirmDialog.style.display = "block";
-    confirmOverlay.style.display = "block";
+    pendingButton = button;
+    lastFocused = document.activeElement;
+    isOpen = true;
+    openedAt = Date.now();
+    overlay.style.pointerEvents = "";
 
-    // Use requestAnimationFrame to ensure the transition works consistently
-    requestAnimationFrame(() => {
+    const text = MESSAGES[type];
+    titleEl.textContent = text.title;
+    messageEl.textContent = text.message;
+    confirmBtn.textContent = text.confirm;
+
+    overlay.style.display = "flex";
+    // The class toggle must land a frame after the display change, or the
+    // browser skips the fade transition.
+    requestAnimationFrame(() =>
       requestAnimationFrame(() => {
-        // Apply the visible state
-        confirmDialog.style.opacity = "1";
-        confirmDialog.style.transform = "translate(-50%, -50%) scale(1)";
-        confirmOverlay.style.opacity = "1";
-      });
-    });
+        if (isOpen) overlay.classList.add("scuc-open");
+      })
+    );
+    document.addEventListener("keydown", onKeydown, true);
+    // The L-shortcut flow focuses Confirm so a plain Enter confirms;
+    // click-opened dialogs keep the safer Cancel default.
+    (focusConfirm ? confirmBtn : cancelBtn).focus();
   };
 
-  // Function to hide the confirmation dialog
-  const hideConfirmDialog = () => {
-    confirmDialog.style.opacity = "0";
-    confirmDialog.style.transform = "translate(-50%, -50%) scale(0.95)";
-    confirmOverlay.style.opacity = "0";
-    setTimeout(() => {
-      confirmDialog.style.display = "none";
-      confirmOverlay.style.display = "none";
+  const closeDialog = () => {
+    if (!isOpen) return;
+    isOpen = false;
+    pendingButton = null;
+    document.removeEventListener("keydown", onKeydown, true);
+    overlay.classList.remove("scuc-open");
+    // Let clicks pass through to the page while the overlay fades out.
+    overlay.style.pointerEvents = "none";
+    hideTimer = setTimeout(() => {
+      overlay.style.display = "none";
     }, 150);
+    if (lastFocused && lastFocused.isConnected) lastFocused.focus();
+    lastFocused = null;
   };
 
-  // Function to confirm and execute the action
   const confirmAction = () => {
-    hideConfirmDialog();
-
-    setTimeout(() => {
-      if (originalButton) {
-        // Remove our event listener temporarily to avoid infinite loop
-        document.removeEventListener("click", handleButtonClick, true);
-
-        // Simulate a click on the original button
-        originalButton.click();
-
-        // Re-add our event listener after a short delay
-        setTimeout(() => {
-          document.addEventListener("click", handleButtonClick, true);
-        }, 100);
-      }
-    }, 150);
+    const button = pendingButton;
+    // Skip the focus restore: a still-held Enter key would re-click the
+    // toggle button and silently undo the confirmed action.
+    lastFocused = null;
+    closeDialog();
+    if (!button) return;
+    if (button.isConnected) {
+      button.click();
+    } else {
+      console.warn(
+        "[SoundCloud Confirmation] The page re-rendered and the original button is gone — please click it again."
+      );
+    }
   };
 
-  // Function to handle button clicks (unlike and unfollow)
-  const handleButtonClick = (event) => {
-    // Check if the clicked element is an unlike button
-    const unlikeButton = event.target.closest(
-      'button.sc-button-like[aria-label="Unlike"]'
-    );
+  const handleClick = (event) => {
+    // Untrusted events include our own confirmed re-click — let them through.
+    if (!event.isTrusted) return;
+    if (!(event.target instanceof Element)) return;
 
-    // Check if the clicked element is an unfollow button
-    const unfollowButton = event.target.closest(
-      "button.sc-button-follow.sc-button-selected"
+    const button = event.target.closest(
+      "button.sc-button-like, button.sc-button-follow"
     );
+    if (!button) return;
 
-    if (unlikeButton) {
-      // Prevent the default action
+    // sc-button-selected marks the active (liked/following) state regardless
+    // of UI language; the aria-label check is a fallback for like buttons.
+    const isActive =
+      button.classList.contains("sc-button-selected") ||
+      button.getAttribute("aria-label") === "Unlike";
+    if (!isActive) return;
+
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    openDialog(
+      button,
+      button.classList.contains("sc-button-like") ? "unlike" : "unfollow"
+    );
+  };
+
+  // SoundCloud's "L" shortcut toggles like on the playing track without a
+  // click, so it has to be intercepted at the keyboard level.
+  const handleShortcut = (event) => {
+    if (event.key !== "l" && event.key !== "L") return;
+    if (event.ctrlKey || event.altKey || event.metaKey) return;
+
+    if (isOpen) {
       event.preventDefault();
-      event.stopPropagation();
-      showConfirmDialog(unlikeButton, "unlike");
-    } else if (
-      unfollowButton &&
-      unfollowButton.textContent.includes("Following")
+      event.stopImmediatePropagation();
+      return;
+    }
+
+    const target = event.target;
+    if (
+      target instanceof Element &&
+      (target.closest("input, textarea, select") || target.isContentEditable)
     ) {
-      // Prevent the default action
-      event.preventDefault();
-      event.stopPropagation();
-      showConfirmDialog(unfollowButton, "unfollow");
+      return;
     }
+
+    const button = document.querySelector(
+      "button.playbackSoundBadge__like, .playControls button.sc-button-like"
+    );
+    if (!button || !button.classList.contains("sc-button-selected")) return;
+
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    openDialog(button, "unlike", true);
   };
 
-  // Add event listener to the document to catch all button clicks
-  document.addEventListener("click", handleButtonClick, true);
-
-  // Add a mutation observer to handle dynamically loaded content
-  const observer = new MutationObserver((mutations) => {
-    for (const mutation of mutations) {
-      if (mutation.addedNodes.length) {
-        // If new nodes are added, we might need to re-attach our event handlers
-        // But we're using document-level event delegation, so we don't need to do anything here
-      }
-    }
-  });
-
-  // Start observing the document with the configured parameters
-  observer.observe(document.body, { childList: true, subtree: true });
-
-  console.log("SoundCloud Unlike & Unfollow Confirmation script loaded");
+  document.addEventListener("click", handleClick, true);
+  document.addEventListener("keydown", handleShortcut, true);
 })();
