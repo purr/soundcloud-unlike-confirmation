@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SoundCloud Unlike & Unfollow Confirmation
 // @namespace    https://github.com/purr
-// @version      1.3.0
+// @version      1.4.0
 // @description  Adds a confirmation popup when unliking tracks or unfollowing users on SoundCloud
 // @author       purr
 // @match        https://*.soundcloud.com/*
@@ -28,8 +28,17 @@
     },
   };
 
-  // SoundCloud themes light/dark via CSS variables on <body> (theme-light /
-  // theme-dark class), so var() with a light fallback tracks the page theme.
+  const ANIM_MS = 150;
+  // A double-click on the toggle button lands its second click on the
+  // just-opened overlay; ignore backdrop clicks until that window passes.
+  const BACKDROP_GUARD_MS = 250;
+
+  // The dialog carries no literal colors: every one of these is written onto
+  // the overlay element by applyTheme() from what the page actually renders,
+  // so this stylesheet is the single place the look is described. Type is left
+  // out on purpose — the overlay is a child of <body>, so it inherits whatever
+  // font the current SoundCloud UI uses instead of pinning one that may not be
+  // the one on screen.
   const CSS = `
     .scuc-overlay {
       position: fixed;
@@ -37,26 +46,25 @@
       display: none;
       align-items: center;
       justify-content: center;
-      background: var(--overlay-color, rgba(18, 18, 18, 0.4));
+      background: var(--scuc-backdrop);
       z-index: 100000;
       opacity: 0;
-      transition: opacity 0.15s ease-in-out;
-      font-family: "Interstate", "Lucida Grande", "Lucida Sans Unicode", "Lucida Sans", Garuda, Verdana, Tahoma, sans-serif;
+      transition: opacity ${ANIM_MS}ms ease-in-out;
     }
     .scuc-overlay.scuc-open {
       opacity: 1;
     }
     .scuc-dialog {
-      background: var(--background-surface-color, #fff);
-      color: var(--font-primary-color, #121212);
-      border: 1px solid var(--highlight-color, #e5e5e5);
+      background: var(--scuc-surface);
+      color: var(--scuc-text);
+      border: 1px solid var(--scuc-border);
       border-radius: 8px;
-      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+      box-shadow: var(--scuc-shadow);
       padding: 24px;
       width: min(400px, calc(100vw - 32px));
       box-sizing: border-box;
       transform: scale(0.95);
-      transition: transform 0.15s ease-in-out;
+      transition: transform ${ANIM_MS}ms ease-in-out;
     }
     .scuc-overlay.scuc-open .scuc-dialog {
       transform: scale(1);
@@ -69,7 +77,7 @@
     .scuc-message {
       margin: 0;
       font-size: 14px;
-      color: var(--font-secondary-color, #666);
+      color: var(--scuc-muted);
     }
     .scuc-buttons {
       display: flex;
@@ -89,16 +97,16 @@
       opacity: 0.8;
     }
     .scuc-btn:focus-visible {
-      outline: 2px solid #f50;
+      outline: 2px solid var(--scuc-accent);
       outline-offset: 2px;
     }
     .scuc-cancel {
-      background: var(--highlight-color, #f3f3f3);
-      color: var(--font-primary-color, #121212);
+      background: var(--scuc-cancel-bg);
+      color: var(--scuc-text);
     }
     .scuc-confirm {
-      background: #f50;
-      color: #fff;
+      background: var(--scuc-accent);
+      color: var(--scuc-on-accent);
     }
     @media (prefers-reduced-motion: reduce) {
       .scuc-overlay,
@@ -107,6 +115,111 @@
       }
     }
   `;
+
+  // --- Theme ---------------------------------------------------------------
+  // SoundCloud runs two UIs side by side (the legacy sc-* one and the newer
+  // Material-UI one) and each has its own light/dark CSS variable names, so
+  // guessing variable names is how you end up with a white dialog on a dark
+  // page. Instead, measure what the page is actually painting — its background
+  // and text color — and derive the whole palette from those two samples.
+
+  const WHITE = { r: 255, g: 255, b: 255 };
+  const DEFAULT_TEXT = { r: 18, g: 18, b: 18 };
+  const DEFAULT_ACCENT = { r: 255, g: 85, b: 0 }; // SoundCloud orange, #f50
+
+  const parseColor = (value) => {
+    const match = /rgba?\(([^)]+)\)/.exec(value || "");
+    if (!match) return null;
+    const parts = match[1].split(/[\s,/]+/).filter(Boolean).map(Number);
+    if (parts.length < 3 || parts.slice(0, 3).some(Number.isNaN)) return null;
+    const [r, g, b, a = 1] = parts;
+    return { r, g, b, a };
+  };
+
+  const rgba = (color, alpha = 1) =>
+    `rgba(${color.r}, ${color.g}, ${color.b}, ${alpha})`;
+
+  // Perceived brightness (ITU-R BT.601), 0-255. Enough to answer "is this
+  // light or dark" without full sRGB luminance maths.
+  const brightness = (color) =>
+    (color.r * 299 + color.g * 587 + color.b * 114) / 1000;
+
+  // Distance from grey; used to reject a sampled "accent" that is really just
+  // black, white or a grey icon.
+  const chroma = (color) =>
+    Math.max(color.r, color.g, color.b) - Math.min(color.r, color.g, color.b);
+
+  const mix = (from, to, ratio) => ({
+    r: Math.round(from.r + (to.r - from.r) * ratio),
+    g: Math.round(from.g + (to.g - from.g) * ratio),
+    b: Math.round(from.b + (to.b - from.b) * ratio),
+    a: 1,
+  });
+
+  // First ancestor that actually paints a background. Returns null when the
+  // page leaves it to the browser default.
+  const samplePageColor = () => {
+    for (const node of [document.body, document.documentElement]) {
+      if (!node) continue;
+      const color = parseColor(getComputedStyle(node).backgroundColor);
+      if (color && color.a > 0.5) return color;
+    }
+    return null;
+  };
+
+  // The liked heart / following badge is rendered in the brand color, so the
+  // button we are guarding is itself the most reliable accent source. Ignore
+  // anything close to grey — legacy sprites color the icon via a background
+  // image and would otherwise hand us the button's grey text color.
+  const sampleAccent = (button) => {
+    if (!button) return DEFAULT_ACCENT;
+    for (const node of [button.querySelector("svg, path"), button]) {
+      if (!node) continue;
+      const style = getComputedStyle(node);
+      for (const value of [style.fill, style.color]) {
+        const color = parseColor(value);
+        if (color && color.a > 0.5 && chroma(color) > 40) return color;
+      }
+    }
+    return DEFAULT_ACCENT;
+  };
+
+  const resolveTheme = (button) => {
+    const text = parseColor(getComputedStyle(document.body).color) ||
+      DEFAULT_TEXT;
+    // If the page declares no background, infer it from the text color rather
+    // than assuming white — light text means a dark page.
+    const page =
+      samplePageColor() ||
+      (brightness(text) > 128 ? { r: 18, g: 18, b: 18 } : WHITE);
+    const isDark = brightness(page) < 128;
+
+    // Lift the dialog off the page: a dark page gets a slightly lighter
+    // surface, a light one goes (near) white.
+    const surface = mix(page, WHITE, isDark ? 0.09 : 0.7);
+    const accent = sampleAccent(button);
+
+    return {
+      "--scuc-surface": rgba(surface),
+      "--scuc-text": rgba(text),
+      // Mixing towards the surface rather than using alpha keeps these stable
+      // no matter what ends up stacked behind the dialog.
+      "--scuc-muted": rgba(mix(surface, text, 0.65)),
+      "--scuc-border": rgba(mix(surface, text, 0.14)),
+      "--scuc-cancel-bg": rgba(mix(surface, text, 0.1)),
+      "--scuc-backdrop": `rgba(0, 0, 0, ${isDark ? 0.6 : 0.45})`,
+      "--scuc-shadow": `0 8px 32px rgba(0, 0, 0, ${isDark ? 0.6 : 0.25})`,
+      "--scuc-accent": rgba(accent),
+      "--scuc-on-accent": brightness(accent) > 150 ? "#121212" : "#fff",
+    };
+  };
+
+  const applyTheme = (button) => {
+    const theme = resolveTheme(button);
+    for (const [name, value] of Object.entries(theme)) {
+      overlay.style.setProperty(name, value);
+    }
+  };
 
   let overlay = null;
   let titleEl = null;
@@ -170,7 +283,7 @@
       if (
         event.target === overlay &&
         pressOnBackdrop &&
-        Date.now() - openedAt > 250
+        Date.now() - openedAt > BACKDROP_GUARD_MS
       ) {
         closeDialog();
       }
@@ -206,6 +319,9 @@
     isOpen = true;
     openedAt = Date.now();
     overlay.style.pointerEvents = "";
+    // Re-measured on every open, so a theme switch (or a navigation into the
+    // other SoundCloud UI) is picked up without any listener.
+    applyTheme(button);
 
     const text = MESSAGES[type];
     titleEl.textContent = text.title;
@@ -236,7 +352,7 @@
     overlay.style.pointerEvents = "none";
     hideTimer = setTimeout(() => {
       overlay.style.display = "none";
-    }, 150);
+    }, ANIM_MS);
     if (lastFocused && lastFocused.isConnected) lastFocused.focus();
     lastFocused = null;
   };
@@ -257,36 +373,60 @@
     }
   };
 
+  // --- Button detection ----------------------------------------------------
+  // The one place that decides "is this an unlike/unfollow button" — both the
+  // click handler and the L shortcut go through it, so the two can't drift
+  // apart. Handles the legacy sc-button markup and the newer Material-UI
+  // (mui-*) icon buttons, which drop the sc-button-* classes and name the
+  // action in aria-label or in a title on the tooltip wrapper instead.
+
+  // Stop the walk before an unrelated ancestor's title can be mistaken for the
+  // button's own label; the MUI wrapper is never more than a couple of levels
+  // up.
+  const LABEL_LOOKUP_DEPTH = 3;
+
+  const readLabel = (button) => {
+    let node = button;
+    for (let depth = 0; node && depth < LABEL_LOOKUP_DEPTH; depth += 1) {
+      const label =
+        node.getAttribute("aria-label") || node.getAttribute("title");
+      if (label) return label.trim();
+      node = node.parentElement;
+    }
+    return "";
+  };
+
+  // Prefix match, so "Unlike" and "Unlike track" both count while "Unliked"
+  // and the inactive "Like"/"Follow" labels do not.
+  const labelAction = (label) => {
+    if (/^unlike\b/i.test(label)) return "unlike";
+    if (/^unfollow\b/i.test(label)) return "unfollow";
+    return null;
+  };
+
   // Returns "unlike" / "unfollow" when the button is in the active
-  // (liked/following) state we want to guard, otherwise null. Handles both the
-  // legacy sc-button markup and the newer Material-UI (mui-*) icon buttons,
-  // which drop the sc-button-* classes and expose the action through
-  // aria-label (on the button) or title (on the wrapping div) instead.
+  // (liked/following) state we want to guard, otherwise null.
   const getButtonType = (button) => {
-    const label =
-      button.getAttribute("aria-label") ||
-      button.closest("[title]")?.getAttribute("title") ||
-      "";
+    const action = labelAction(readLabel(button));
 
     // Legacy buttons mark the active state with sc-button-selected; the label
     // check is a language-independent fallback for that same state.
     if (button.classList.contains("sc-button-like")) {
-      return button.classList.contains("sc-button-selected") || label === "Unlike"
+      return button.classList.contains("sc-button-selected") ||
+        action === "unlike"
         ? "unlike"
         : null;
     }
     if (button.classList.contains("sc-button-follow")) {
       return button.classList.contains("sc-button-selected") ||
-        label === "Unfollow"
+        action === "unfollow"
         ? "unfollow"
         : null;
     }
 
     // New MUI buttons: the label already reflects the active action, so a
     // "Like"/"Follow" (inactive) button simply won't match here.
-    if (label === "Unlike") return "unlike";
-    if (label === "Unfollow") return "unfollow";
-    return null;
+    return action;
   };
 
   const handleClick = (event) => {
@@ -303,6 +443,28 @@
     event.preventDefault();
     event.stopImmediatePropagation();
     openDialog(button, type);
+  };
+
+  // Where the player bar might be, most specific first. The search stays inside
+  // it on purpose: a page-wide lookup could hand back some other track's like
+  // button and unlike the wrong thing.
+  const PLAYER_BAR_SELECTORS = [
+    ".playControls",
+    "[class*='playControls']",
+    "[class*='PlayControls']",
+    "[data-testid*='player']",
+    "footer",
+  ];
+
+  const findPlayingTrackLikeButton = () => {
+    for (const selector of PLAYER_BAR_SELECTORS) {
+      for (const bar of document.querySelectorAll(selector)) {
+        for (const candidate of bar.querySelectorAll("button")) {
+          if (getButtonType(candidate) === "unlike") return candidate;
+        }
+      }
+    }
+    return null;
   };
 
   // SoundCloud's "L" shortcut toggles like on the playing track without a
@@ -325,10 +487,8 @@
       return;
     }
 
-    const button = document.querySelector(
-      "button.playbackSoundBadge__like, .playControls button.sc-button-like"
-    );
-    if (!button || !button.classList.contains("sc-button-selected")) return;
+    const button = findPlayingTrackLikeButton();
+    if (!button) return;
 
     event.preventDefault();
     event.stopImmediatePropagation();
