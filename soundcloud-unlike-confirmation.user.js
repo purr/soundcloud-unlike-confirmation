@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SoundCloud Unlike & Unfollow Confirmation
 // @namespace    https://github.com/purr
-// @version      1.4.0
+// @version      1.4.1
 // @description  Adds a confirmation popup when unliking tracks or unfollowing users on SoundCloud
 // @author       purr
 // @match        https://*.soundcloud.com/*
@@ -118,10 +118,11 @@
 
   // --- Theme ---------------------------------------------------------------
   // SoundCloud runs two UIs side by side (the legacy sc-* one and the newer
-  // Material-UI one) and each has its own light/dark CSS variable names, so
-  // guessing variable names is how you end up with a white dialog on a dark
-  // page. Instead, measure what the page is actually painting — its background
-  // and text color — and derive the whole palette from those two samples.
+  // Material-UI one). They don't share CSS variable names and they don't even
+  // paint their background in the same place: the legacy UI puts it on <body>,
+  // the MUI one on a container several levels below it. So neither a variable
+  // name nor <body> is a reliable source — the only thing that always knows
+  // what is on screen is the element chain the clicked button sits in.
 
   const WHITE = { r: 255, g: 255, b: 255 };
   const DEFAULT_TEXT = { r: 18, g: 18, b: 18 };
@@ -156,15 +157,18 @@
     a: 1,
   });
 
-  // First ancestor that actually paints a background. Returns null when the
-  // page leaves it to the browser default.
-  const samplePageColor = () => {
-    for (const node of [document.body, document.documentElement]) {
-      if (!node) continue;
-      const color = parseColor(getComputedStyle(node).backgroundColor);
-      if (color && color.a > 0.5) return color;
+  // Walk out from the button to the first element that actually paints, and
+  // take both colors from it. They are a pair the UI already uses together, so
+  // the dialog is legible by construction rather than by correction.
+  const sampleSurface = (button) => {
+    for (let node = button; node; node = node.parentElement) {
+      const style = getComputedStyle(node);
+      const page = parseColor(style.backgroundColor);
+      if (page && page.a > 0.5) {
+        return { page, text: parseColor(style.color) || DEFAULT_TEXT };
+      }
     }
-    return null;
+    return { page: WHITE, text: DEFAULT_TEXT };
   };
 
   // The liked heart / following badge is rendered in the brand color, so the
@@ -185,13 +189,7 @@
   };
 
   const resolveTheme = (button) => {
-    const text = parseColor(getComputedStyle(document.body).color) ||
-      DEFAULT_TEXT;
-    // If the page declares no background, infer it from the text color rather
-    // than assuming white — light text means a dark page.
-    const page =
-      samplePageColor() ||
-      (brightness(text) > 128 ? { r: 18, g: 18, b: 18 } : WHITE);
+    const { page, text } = sampleSurface(button || document.body);
     const isDark = brightness(page) < 128;
 
     // Lift the dialog off the page: a dark page gets a slightly lighter
