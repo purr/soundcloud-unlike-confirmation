@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SoundCloud Unlike & Unfollow Confirmation
 // @namespace    https://github.com/purr
-// @version      1.2.0
+// @version      1.3.0
 // @description  Adds a confirmation popup when unliking tracks or unfollowing users on SoundCloud
 // @author       purr
 // @match        https://*.soundcloud.com/*
@@ -257,29 +257,52 @@
     }
   };
 
+  // Returns "unlike" / "unfollow" when the button is in the active
+  // (liked/following) state we want to guard, otherwise null. Handles both the
+  // legacy sc-button markup and the newer Material-UI (mui-*) icon buttons,
+  // which drop the sc-button-* classes and expose the action through
+  // aria-label (on the button) or title (on the wrapping div) instead.
+  const getButtonType = (button) => {
+    const label =
+      button.getAttribute("aria-label") ||
+      button.closest("[title]")?.getAttribute("title") ||
+      "";
+
+    // Legacy buttons mark the active state with sc-button-selected; the label
+    // check is a language-independent fallback for that same state.
+    if (button.classList.contains("sc-button-like")) {
+      return button.classList.contains("sc-button-selected") || label === "Unlike"
+        ? "unlike"
+        : null;
+    }
+    if (button.classList.contains("sc-button-follow")) {
+      return button.classList.contains("sc-button-selected") ||
+        label === "Unfollow"
+        ? "unfollow"
+        : null;
+    }
+
+    // New MUI buttons: the label already reflects the active action, so a
+    // "Like"/"Follow" (inactive) button simply won't match here.
+    if (label === "Unlike") return "unlike";
+    if (label === "Unfollow") return "unfollow";
+    return null;
+  };
+
   const handleClick = (event) => {
     // Untrusted events include our own confirmed re-click — let them through.
     if (!event.isTrusted) return;
     if (!(event.target instanceof Element)) return;
 
-    const button = event.target.closest(
-      "button.sc-button-like, button.sc-button-follow"
-    );
+    const button = event.target.closest("button");
     if (!button) return;
 
-    // sc-button-selected marks the active (liked/following) state regardless
-    // of UI language; the aria-label check is a fallback for like buttons.
-    const isActive =
-      button.classList.contains("sc-button-selected") ||
-      button.getAttribute("aria-label") === "Unlike";
-    if (!isActive) return;
+    const type = getButtonType(button);
+    if (!type) return;
 
     event.preventDefault();
     event.stopImmediatePropagation();
-    openDialog(
-      button,
-      button.classList.contains("sc-button-like") ? "unlike" : "unfollow"
-    );
+    openDialog(button, type);
   };
 
   // SoundCloud's "L" shortcut toggles like on the playing track without a
