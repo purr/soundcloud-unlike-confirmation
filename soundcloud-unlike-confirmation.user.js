@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SoundCloud Unlike & Unfollow Confirmation
 // @namespace    https://github.com/purr
-// @version      1.4.1
+// @version      1.4.2
 // @description  Adds a confirmation popup when unliking tracks or unfollowing users on SoundCloud
 // @author       purr
 // @match        https://*.soundcloud.com/*
@@ -33,14 +33,24 @@
   // just-opened overlay; ignore backdrop clicks until that window passes.
   const BACKDROP_GUARD_MS = 250;
 
-  // The dialog carries no literal colors: every one of these is written onto
-  // the overlay element by applyTheme() from what the page actually renders,
-  // so this stylesheet is the single place the look is described. Type is left
-  // out on purpose — the overlay is a child of <body>, so it inherits whatever
-  // font the current SoundCloud UI uses instead of pinning one that may not be
-  // the one on screen.
+  // The whole look lives here: two palettes, picked by adding .scuc-dark. That
+  // is the only thing the script decides at runtime. Type is left out on
+  // purpose — the overlay is a child of <body>, so it inherits whatever font
+  // the current SoundCloud UI uses instead of pinning one that may not be the
+  // one on screen.
   const CSS = `
     .scuc-overlay {
+      /* Light palette. The accent is SoundCloud orange in both themes. */
+      --scuc-accent: #f50;
+      --scuc-on-accent: #fff;
+      --scuc-surface: #fff;
+      --scuc-text: #121212;
+      --scuc-muted: #666;
+      --scuc-border: #e5e5e5;
+      --scuc-cancel-bg: #f2f2f2;
+      --scuc-backdrop: rgba(0, 0, 0, 0.45);
+      --scuc-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+
       position: fixed;
       inset: 0;
       display: none;
@@ -50,6 +60,15 @@
       z-index: 100000;
       opacity: 0;
       transition: opacity ${ANIM_MS}ms ease-in-out;
+    }
+    .scuc-overlay.scuc-dark {
+      --scuc-surface: #242424;
+      --scuc-text: #fff;
+      --scuc-muted: #999;
+      --scuc-border: #383838;
+      --scuc-cancel-bg: #333;
+      --scuc-backdrop: rgba(0, 0, 0, 0.6);
+      --scuc-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
     }
     .scuc-overlay.scuc-open {
       opacity: 1;
@@ -117,106 +136,31 @@
   `;
 
   // --- Theme ---------------------------------------------------------------
-  // SoundCloud runs two UIs side by side (the legacy sc-* one and the newer
-  // Material-UI one). They don't share CSS variable names and they don't even
-  // paint their background in the same place: the legacy UI puts it on <body>,
-  // the MUI one on a container several levels below it. So neither a variable
-  // name nor <body> is a reliable source — the only thing that always knows
-  // what is on screen is the element chain the clicked button sits in.
+  // Is SoundCloud dark right now? That is a property of the page, not of the
+  // button that was clicked, so it is the only thing measured — the colors
+  // themselves are the two fixed palettes in CSS above. First source that
+  // actually knows wins:
+  //   1. the color-scheme the page declares (the Material-UI build sets it)
+  //   2. the first element from the button outwards that paints a background —
+  //      the legacy UI paints <body>, the MUI one a container below it, so
+  //      neither alone is reliable
+  //   3. the browser preference, which is what a page that declares nothing
+  //      ends up rendering as anyway
+  const isDarkTheme = (button) => {
+    const scheme = getComputedStyle(document.documentElement).colorScheme;
+    if (scheme === "dark" || scheme === "light") return scheme === "dark";
 
-  const WHITE = { r: 255, g: 255, b: 255 };
-  const DEFAULT_TEXT = { r: 18, g: 18, b: 18 };
-  const DEFAULT_ACCENT = { r: 255, g: 85, b: 0 }; // SoundCloud orange, #f50
-
-  const parseColor = (value) => {
-    const match = /rgba?\(([^)]+)\)/.exec(value || "");
-    if (!match) return null;
-    const parts = match[1].split(/[\s,/]+/).filter(Boolean).map(Number);
-    if (parts.length < 3 || parts.slice(0, 3).some(Number.isNaN)) return null;
-    const [r, g, b, a = 1] = parts;
-    return { r, g, b, a };
-  };
-
-  const rgba = (color, alpha = 1) =>
-    `rgba(${color.r}, ${color.g}, ${color.b}, ${alpha})`;
-
-  // Perceived brightness (ITU-R BT.601), 0-255. Enough to answer "is this
-  // light or dark" without full sRGB luminance maths.
-  const brightness = (color) =>
-    (color.r * 299 + color.g * 587 + color.b * 114) / 1000;
-
-  // Distance from grey; used to reject a sampled "accent" that is really just
-  // black, white or a grey icon.
-  const chroma = (color) =>
-    Math.max(color.r, color.g, color.b) - Math.min(color.r, color.g, color.b);
-
-  const mix = (from, to, ratio) => ({
-    r: Math.round(from.r + (to.r - from.r) * ratio),
-    g: Math.round(from.g + (to.g - from.g) * ratio),
-    b: Math.round(from.b + (to.b - from.b) * ratio),
-    a: 1,
-  });
-
-  // Walk out from the button to the first element that actually paints, and
-  // take both colors from it. They are a pair the UI already uses together, so
-  // the dialog is legible by construction rather than by correction.
-  const sampleSurface = (button) => {
     for (let node = button; node; node = node.parentElement) {
-      const style = getComputedStyle(node);
-      const page = parseColor(style.backgroundColor);
-      if (page && page.a > 0.5) {
-        return { page, text: parseColor(style.color) || DEFAULT_TEXT };
-      }
+      const match = /rgba?\(([^)]+)\)/.exec(
+        getComputedStyle(node).backgroundColor
+      );
+      if (!match) continue;
+      const [r, g, b, a = 1] = match[1].split(/[\s,/]+/).map(Number);
+      if (a < 0.5) continue;
+      // Perceived brightness (ITU-R BT.601), 0-255.
+      return (r * 299 + g * 587 + b * 114) / 1000 < 128;
     }
-    return { page: WHITE, text: DEFAULT_TEXT };
-  };
-
-  // The liked heart / following badge is rendered in the brand color, so the
-  // button we are guarding is itself the most reliable accent source. Ignore
-  // anything close to grey — legacy sprites color the icon via a background
-  // image and would otherwise hand us the button's grey text color.
-  const sampleAccent = (button) => {
-    if (!button) return DEFAULT_ACCENT;
-    for (const node of [button.querySelector("svg, path"), button]) {
-      if (!node) continue;
-      const style = getComputedStyle(node);
-      for (const value of [style.fill, style.color]) {
-        const color = parseColor(value);
-        if (color && color.a > 0.5 && chroma(color) > 40) return color;
-      }
-    }
-    return DEFAULT_ACCENT;
-  };
-
-  const resolveTheme = (button) => {
-    const { page, text } = sampleSurface(button || document.body);
-    const isDark = brightness(page) < 128;
-
-    // Lift the dialog off the page: a dark page gets a slightly lighter
-    // surface, a light one goes (near) white.
-    const surface = mix(page, WHITE, isDark ? 0.09 : 0.7);
-    const accent = sampleAccent(button);
-
-    return {
-      "--scuc-surface": rgba(surface),
-      "--scuc-text": rgba(text),
-      // Mixing towards the surface rather than using alpha keeps these stable
-      // no matter what ends up stacked behind the dialog.
-      "--scuc-muted": rgba(mix(surface, text, 0.65)),
-      "--scuc-border": rgba(mix(surface, text, 0.14)),
-      "--scuc-cancel-bg": rgba(mix(surface, text, 0.1)),
-      "--scuc-backdrop": `rgba(0, 0, 0, ${isDark ? 0.6 : 0.45})`,
-      "--scuc-shadow": `0 8px 32px rgba(0, 0, 0, ${isDark ? 0.6 : 0.25})`,
-      "--scuc-accent": rgba(accent),
-      "--scuc-on-accent": brightness(accent) > 150 ? "#121212" : "#fff",
-    };
-  };
-
-  const applyTheme = (button) => {
-    const theme = resolveTheme(button);
-    for (const [name, value] of Object.entries(theme)) {
-      overlay.style.setProperty(name, value);
-    }
+    return matchMedia("(prefers-color-scheme: dark)").matches;
   };
 
   let overlay = null;
@@ -317,9 +261,9 @@
     isOpen = true;
     openedAt = Date.now();
     overlay.style.pointerEvents = "";
-    // Re-measured on every open, so a theme switch (or a navigation into the
+    // Re-checked on every open, so a theme switch (or a navigation into the
     // other SoundCloud UI) is picked up without any listener.
-    applyTheme(button);
+    overlay.classList.toggle("scuc-dark", isDarkTheme(button));
 
     const text = MESSAGES[type];
     titleEl.textContent = text.title;
